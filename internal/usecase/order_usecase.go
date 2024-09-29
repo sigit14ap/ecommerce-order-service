@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/sigit14ap/order-service/helpers"
 	"github.com/sigit14ap/order-service/internal/delivery/dto"
@@ -90,4 +91,66 @@ func (uc *OrderUsecase) Checkout(orderData dto.OrderDTO) (*domain.Order, error) 
 
 	tx.Commit()
 	return &orderCreated, nil
+}
+
+func (uc *OrderUsecase) ReleaseStock() error {
+	uc.mutex.Lock()
+	defer uc.mutex.Unlock()
+
+	tx := uc.orderRepository.BeginTransaction()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// 10 Minutes
+	releaseDuration := 10 * time.Minute
+
+	unpaidOrders, err := uc.orderRepository.GetUnpaidOrders(tx, releaseDuration)
+	if err != nil {
+		return err
+	}
+
+	for _, order := range unpaidOrders {
+		var errRelease error
+
+		orderItems, err := uc.orderRepository.GetOrderItems(tx, order.ID)
+		if err != nil {
+			errRelease = err
+			continue
+		}
+
+		for _, item := range orderItems {
+			stock, err := uc.orderRepository.GetStockProductByWarehouse(tx, item.ProductID, item.WarehouseID)
+			if err != nil {
+				fmt.Println("Error fetching stock for product ID:", item.ProductID, err)
+				errRelease = err
+				continue
+			}
+
+			stock.Quantity += item.Quantity
+
+			err = uc.orderRepository.UpdateStock(tx, stock)
+			if err != nil {
+				fmt.Println("Error updating stock for product ID:", item.ProductID, err)
+				errRelease = err
+				continue
+			}
+		}
+
+		err = uc.orderRepository.UpdateOrderStatus(tx, order.ID, helpers.OrderStatusCancelled)
+		if err != nil {
+			fmt.Println("Error updating order status for order ID:", order.ID, err)
+			errRelease = err
+			continue
+		}
+
+		if errRelease != nil {
+			tx.Rollback()
+		}
+	}
+
+	tx.Commit()
+	return nil
 }

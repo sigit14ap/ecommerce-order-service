@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"time"
 
 	"github.com/sigit14ap/order-service/helpers"
 	"github.com/sigit14ap/order-service/internal/domain"
@@ -14,6 +15,11 @@ type OrderRepository interface {
 	GetProductByID(productID uint64) (domain.Product, error)
 	GetStockByProductID(tx *gorm.DB, productID uint64, quantity int) (domain.Stock, error)
 	UpdateStock(tx *gorm.DB, stock domain.Stock) error
+
+	GetStockProductByWarehouse(tx *gorm.DB, productID uint64, warehouseID uint64) (domain.Stock, error)
+	GetUnpaidOrders(tx *gorm.DB, duration time.Duration) ([]domain.Order, error)
+	GetOrderItems(tx *gorm.DB, orderID uint64) ([]domain.OrderItem, error)
+	UpdateOrderStatus(tx *gorm.DB, orderID uint64, status string) error
 }
 
 type orderRepository struct {
@@ -72,4 +78,36 @@ func (repository *orderRepository) GetStockByProductID(tx *gorm.DB, productID ui
 
 func (repository *orderRepository) UpdateStock(tx *gorm.DB, stock domain.Stock) error {
 	return tx.Save(&stock).Error
+}
+
+func (repository *orderRepository) GetUnpaidOrders(tx *gorm.DB, duration time.Duration) ([]domain.Order, error) {
+	var orders []domain.Order
+	cutoffTime := time.Now().Add(-duration)
+
+	if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("status = ? AND created_at < ?", helpers.OrderStatusPending, cutoffTime).Find(&orders).Error; err != nil {
+		return nil, err
+	}
+
+	return orders, nil
+}
+
+func (repository *orderRepository) GetStockProductByWarehouse(tx *gorm.DB, productID uint64, warehouseID uint64) (domain.Stock, error) {
+	var stock domain.Stock
+	err := tx.Set("gorm:query_option", "FOR UPDATE").First(&stock, "product_id = ? AND warehouse_id = ?", productID, warehouseID).Error
+
+	return stock, err
+}
+
+func (repository *orderRepository) GetOrderItems(tx *gorm.DB, orderID uint64) ([]domain.OrderItem, error) {
+	var items []domain.OrderItem
+
+	if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("order_id = ?", orderID).Find(&items).Error; err != nil {
+		return nil, err
+	}
+
+	return items, nil
+}
+
+func (repository *orderRepository) UpdateOrderStatus(tx *gorm.DB, orderID uint64, status string) error {
+	return tx.Model(&domain.Order{}).Where("id = ?", orderID).Update("status", status).Error
 }

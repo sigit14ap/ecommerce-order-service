@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/sigit14ap/order-service/config"
 	"github.com/sigit14ap/order-service/helpers"
@@ -51,6 +52,20 @@ func main() {
 	orderHandler := delivery.NewOrderHandler(orderUsecase)
 
 	router := router.NewRouter(orderHandler, userService)
+
+	go func() {
+		for {
+			log.Info("Release Stock Started")
+			err := orderUsecase.ReleaseStock()
+
+			if err != nil {
+				log.Fatalf("Error when release stock product: %v", err)
+			}
+
+			// 5 Minutes
+			time.Sleep(5 * time.Minute)
+		}
+	}()
 
 	log.Info(router.Run(":" + os.Getenv("APP_PORT")))
 }
